@@ -53,7 +53,8 @@ class MainWindow(QMainWindow):
         self.ultima_simulacion: SimulacionInscripcion | None = None
 
         self.setWindowTitle("TP5 Simulación")
-        self.showMaximized()
+        # self.showMaximized()
+        self.setMinimumSize(1800, 1000)
 
         # contenedor principal de todos los elementos ui
         container = QWidget()
