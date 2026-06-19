@@ -374,14 +374,30 @@ class MainWindow(QMainWindow):
     def mostrar_vector_estado(self, vector_estado):
         """Vuelca el vector de estado devuelto por la simulación a la
         tabla: una columna por cada clave del diccionario de fila
-        (número de fila, evento, próximos eventos, rnd's, etc.)."""
+        (número de fila, evento, próximos eventos, rnd's, etc.).
+
+        Los alumnos (objetos temporales) se agregan en cada fila con
+        columnas Alumno{n}_*, y n varía según cuántos haya en ese
+        instante puntual: no todas las filas tienen la misma cantidad de
+        claves. Por eso las columnas de la tabla se calculan como la
+        UNIÓN de las claves de todas las filas (en el orden en que van
+        apareciendo), en vez de tomar nada más que las de la primera
+        fila — así la tabla sólo tiene tantas columnas de alumnos como
+        el máximo realmente alcanzado, y no columnas vacías de más."""
         tabla = self.tabla_resultado
         if not vector_estado:
             tabla.setRowCount(0)
             tabla.setColumnCount(0)
             return
 
-        columnas = list(vector_estado[0].keys())
+        columnas = []
+        vistas = set()
+        for fila in vector_estado:
+            for columna in fila:
+                if columna not in vistas:
+                    vistas.add(columna)
+                    columnas.append(columna)
+
         tabla.setColumnCount(len(columnas))
         tabla.setHorizontalHeaderLabels(columnas)
         tabla.setRowCount(len(vector_estado))
@@ -391,7 +407,10 @@ class MainWindow(QMainWindow):
         tabla.setUpdatesEnabled(False)
         for fila_idx, fila in enumerate(vector_estado):
             for col_idx, columna in enumerate(columnas):
-                valor = QTableWidgetItem(str(fila[columna]))
+                # get(): esta fila puede no tener esta columna (por
+                # ejemplo, tiene menos alumnos que el máximo de la
+                # ventana), en ese caso se muestra vacío.
+                valor = QTableWidgetItem(str(fila.get(columna, '')))
                 tabla.setItem(fila_idx, col_idx, valor)
         tabla.setUpdatesEnabled(True)
 

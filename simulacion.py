@@ -99,6 +99,18 @@ class SimulacionInscripcion:
         self.reloj = 0
         self.iteracion = 0
 
+        # Últimos números aleatorios / valores generados. Se inicializan
+        # ACÁ, antes de generar nada, para que los primeros rnd (los que
+        # se calculan dos líneas más abajo, para la fila de
+        # "Inicialización") no se pisen con un '' después.
+        self.rnd_llegada_alumno = ''
+        self.rnd_llegada_mantenimiento = ''
+        self.rnd_atencion = ''
+        self.rnd_archivos_mantenimiento = ''
+        self.archivos_a0 = ''
+        self.tiempo_mantenimiento_calc = ''
+        self.pc_asignada = ''
+
         # Próximos eventos principales (-1 significa "sin evento programado")
         # Se generan ya acá los primeros valores de las variables
         # aleatorias de llegada, tal como se ve en la fila de
@@ -138,17 +150,6 @@ class SimulacionInscripcion:
         self.tiempo_ocioso_mantenimiento = 0
         self.cont_visitas_mantenimiento = 0
 
-        # Últimos números aleatorios / valores generados. Se resetean al
-        # inicio de cada iteración y solo quedan con valor en la fila donde
-        # efectivamente se generó la variable aleatoria correspondiente.
-        self.rnd_llegada_alumno = ''
-        self.rnd_llegada_mantenimiento = ''
-        self.rnd_atencion = ''
-        self.rnd_archivos_mantenimiento = ''
-        self.archivos_a0 = ''
-        self.tiempo_mantenimiento_calc = ''
-        self.pc_asignada = ''
-
         # Registro de integraciones de Euler (una entrada por cada PC a la
         # que se le hace mantenimiento), con referencia a la visita y la PC
         # para poder identificar a qué instancia de la simulación pertenece.
@@ -167,19 +168,27 @@ class SimulacionInscripcion:
     # Cada método de esta sección genera UNA variable aleatoria con el
     # método de la transformada inversa, guarda el rnd usado en un
     # self.rnd_* (para que agregar_fila lo muestre en la fila del evento
-    # que lo generó) y devuelve el valor ya calculado.
+    # que lo generó) y devuelve el valor ya calculado. El rnd se trunca a
+    # 2 decimales ANTES de usarlo en la fórmula (no sólo para mostrarlo),
+    # igual que se hace a mano en la resolución por Excel.
 
     def generar_llegada_alumno(self):
         """Próxima llegada de un alumno: exponencial negativa, media 2'."""
-        rnd = random.random()
-        self.rnd_llegada_alumno = round(rnd, 4)
+        rnd = round(random.random(), 2)
+        # Si el random da >= 0.995 redondea a 1.00, y log(1-1.00) no
+        # está definido (1/200 de probabilidad, pero en una corrida de
+        # miles de iteraciones termina pasando). Se tapa con 0.99, el
+        # valor truncado más cercano que sigue siendo válido.
+        if rnd >= 1:
+            rnd = 0.99
+        self.rnd_llegada_alumno = rnd
         tiempo_entre_llegadas = -self.llegada_media * math.log(1 - rnd)
         return self.reloj + tiempo_entre_llegadas
 
     def generar_tiempo_inscripcion(self):
         """Duración de una inscripción: uniforme entre a y b minutos."""
-        rnd = random.random()
-        self.rnd_atencion = round(rnd, 4)
+        rnd = round(random.random(), 2)
+        self.rnd_atencion = rnd
         tiempo = self.inscripcion_a + rnd * \
             (self.inscripcion_b - self.inscripcion_a)
         return tiempo
@@ -188,8 +197,8 @@ class SimulacionInscripcion:
         """Próxima visita del técnico: uniforme media ± variación
         (1 hora ± 3' por defecto), contada desde que se llama (es decir,
         desde que terminó el mantenimiento de la última PC del ciclo)."""
-        rnd = random.random()
-        self.rnd_llegada_mantenimiento = round(rnd, 4)
+        rnd = round(random.random(), 2)
+        self.rnd_llegada_mantenimiento = rnd
         a = self.mantenimiento_media - self.mantenimiento_var
         b = self.mantenimiento_media + self.mantenimiento_var
         tiempo = a + rnd * (b - a)
@@ -199,8 +208,8 @@ class SimulacionInscripcion:
         """Cantidad de archivos (A0) de la PC a mantener: 1000, 1500 o
         2000 con probabilidad 1/3 cada uno. Este valor es el que alimenta
         la integración por Euler de dA/dt = -68 - A²/A0."""
-        rnd = random.random()
-        self.rnd_archivos_mantenimiento = round(rnd, 4)
+        rnd = round(random.random(), 2)
+        self.rnd_archivos_mantenimiento = rnd
         # Pueden ser 1000, 1500, o 2000 (probabilidad uniforme de 1/3)
         if rnd < 1 / 3:
             a0 = 1000
@@ -551,9 +560,10 @@ class SimulacionInscripcion:
         """Construye una fila del vector de estado con todo lo que pide
         el enunciado: número de fila, hora simulada, evento, próximos
         eventos a ejecutarse (px_*), objetos del sistema con sus
-        atributos (estado_mantenimiento, PCx_est/PCx_fin), variables
-        auxiliares (cola, contadores) y el rnd de cada variable aleatoria
-        que se haya generado en esta iteración puntual."""
+        atributos (estado_mantenimiento, PCx_est/PCx_fin, y los alumnos
+        presentes en Alumno{n}_*), variables auxiliares (cola,
+        contadores) y el rnd de cada variable aleatoria que se haya
+        generado en esta iteración puntual."""
         self.numero_fila += 1
         fila = {
             'numero_fila': self.numero_fila,
@@ -589,8 +599,21 @@ class SimulacionInscripcion:
                 round(tiempo_fin, 2) if tiempo_fin != -1 else ''
             )
 
-        # Cuando es el fin se puede filtrar campos temp objects (alumnos)
-        # como dice el enunciado.
+        # Objetos temporales: los alumnos presentes en el sistema en
+        # este instante (los que ya se fueron no se muestran, porque ya
+        # no existen). La cantidad de columnas Alumno{n}_* es dinámica
+        # según cuántos haya en cada fila puntual, en vez de reservar de
+        # antemano columnas para un máximo hipotético que casi siempre
+        # estarían vacías. En la última fila (corte por fin de
+        # simulación) el enunciado dice que no es necesario mostrarlos.
+        if evento != "Corte por Fin de Simulación":
+            for i, alum in enumerate(self.alumnos_en_sistema, start=1):
+                fila[f'Alumno{i}_id'] = alum.id_alumno
+                fila[f'Alumno{i}_estado'] = alum.estado
+                fila[f'Alumno{i}_llegada'] = round(alum.hora_llegada, 2)
+                fila[f'Alumno{i}_pc'] = (
+                    alum.pc_id if alum.pc_id is not None else ''
+                )
 
         self.vector_estado.append(fila)
 
