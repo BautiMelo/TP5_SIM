@@ -1,3 +1,10 @@
+# Motor de simulación de eventos discretos para el TP5 (inscripción a
+# exámenes). Funciona con la técnica de "próximo evento": en cada
+# iteración se calculan los tiempos de todos los eventos pendientes, se
+# salta el reloj al más cercano y se ejecuta su lógica. Cada vez que se
+# guarda una fila del vector de estado queda un snapshot completo del
+# sistema en ese instante (eventos, próximos eventos, objetos, contadores
+# y los rnd usados), tal como pide el enunciado.
 import csv
 import math
 import random
@@ -6,21 +13,36 @@ from euler import EulerSimulator
 
 
 class Computadora:
+    """Representa una de las 5 PCs de inscripción (los "servidores")."""
+
     def __init__(self, id_pc):
-        self.id_pc = id_pc
+        self.id_pc = id_pc  # 1 a 5
         self.estado = 'Libre'  # 'Libre', 'Inscribiendo', 'Mantenimiento'
-        self.tiempo_fin_inscripcion = -1
+        # -1 = no tiene ninguna inscripción en curso en este momento
+        self.tiempo_fin_inscripcion: float = -1
 
 
 class ObjetoAlumno:
+    """Un alumno dentro del sistema (en cola o siendo atendido)."""
+
     def __init__(self, id_alumno, estado, hora_llegada, pc_id=None):
         self.id_alumno = id_alumno
         self.estado = estado  # 'Esperando turno', 'Siendo inscripto'
         self.hora_llegada = hora_llegada
-        self.pc_id = pc_id  # PC que lo está atendiendo (None si espera)
+        # PC que lo está atendiendo (None si todavía espera en la cola).
+        # Es necesario para saber, cuando termina una inscripción en una
+        # PC puntual, a qué alumno hay que liberar (puede haber varias
+        # PCs atendiendo alumnos distintos al mismo tiempo).
+        self.pc_id = pc_id
 
 
 class SimulacionInscripcion:
+    """Motor principal: corre la simulación y arma el vector de estado.
+
+    Todos los parámetros del __init__ son los valores "en rojo" del
+    enunciado (parametrizables desde la pantalla o la línea de comandos).
+    """
+
     def __init__(self,
                  tiempo_x, iteraciones_max,
                  mostrar_desde_i, mostrar_desde_hora_j,
@@ -31,26 +53,28 @@ class SimulacionInscripcion:
                  h_euler=0.1):
 
         # Parámetros (en rojo o parametrizables)
-        self.tiempo_x = tiempo_x
-        self.iteraciones_max = iteraciones_max
-        self.mostrar_desde_i = mostrar_desde_i
-        self.mostrar_desde_hora_j = mostrar_desde_hora_j
+        self.tiempo_x = tiempo_x  # X: tiempo total a simular (minutos)
+        self.iteraciones_max = iteraciones_max  # N: tope de iteraciones
+        self.mostrar_desde_i = mostrar_desde_i  # i: cantidad de filas a ver
+        self.mostrar_desde_hora_j = mostrar_desde_hora_j  # j: desde cuándo
 
-        self.inscripcion_a = inscripcion_a
-        self.inscripcion_b = inscripcion_b
-        self.llegada_media = llegada_media
-        self.mantenimiento_media = mantenimiento_media
-        self.mantenimiento_var = mantenimiento_var
-        self.max_cola = max_cola
-        self.tiempo_regreso = tiempo_regreso
+        self.inscripcion_a = inscripcion_a  # min. inscripción (uniforme)
+        self.inscripcion_b = inscripcion_b  # max. inscripción (uniforme)
+        self.llegada_media = llegada_media  # media exp. negativa, alumnos
+        self.mantenimiento_media = mantenimiento_media  # media (60' = 1h)
+        self.mantenimiento_var = mantenimiento_var  # +/- 3' uniforme
+        self.max_cola = max_cola  # alumnos esperando antes de irse (6)
+        self.tiempo_regreso = tiempo_regreso  # minutos hasta que regresa
 
-        # Euler
+        # Euler: integra dA/dt = -68 - A²/A0 para la demora de mantenimiento
         self.euler = EulerSimulator(h_euler)
 
         self.reset_state()
 
     @classmethod
     def desde_params(cls, params):
+        """Construye la simulación a partir de un objeto Params de la UI,
+        mapeando cada campo al parámetro correspondiente del motor."""
         return cls(
             tiempo_x=params.tiempo_maximo_simulacion,
             iteraciones_max=params.iteraciones_maximas,
@@ -67,26 +91,41 @@ class SimulacionInscripcion:
         )
 
     def reset_state(self):
+        """Inicializa (o reinicia) todas las variables de estado de una
+        corrida nueva: reloj, próximos eventos, PCs, colas, contadores y
+        el vector de estado vacío. Se llama una sola vez, al final del
+        __init__."""
         # Reloj e Iteracion
         self.reloj = 0
         self.iteracion = 0
 
         # Próximos eventos principales (-1 significa "sin evento programado")
+        # Se generan ya acá los primeros valores de las variables
+        # aleatorias de llegada, tal como se ve en la fila de
+        # "Inicialización" del vector de estado.
         self.proxima_llegada_alumno = self.generar_llegada_alumno()
         self.proxima_llegada_mantenimiento = \
             self.generar_llegada_mantenimiento()
-        self.proximo_fin_mantenimiento = -1
+        self.proximo_fin_mantenimiento: float = -1
 
-        # Lista para alumnos que regresan
+        # Lista para alumnos que se fueron y van a volver más tarde
         self.proximos_regresos = []
 
-        # Servidores (PCs)
+        # Servidores (PCs), siempre 5 (PC 1 a PC 5)
         self.pcs = [Computadora(i) for i in range(1, 6)]
 
-        # Variables de Mantenimiento
-        self.estado_mantenimiento = 'Salio'  # Salio, Esperando, Trabajando
-        self.pc_a_mantener = 0  # Indice 0 a 4 correspondientes a PC 1 a 5
-        self.llegada_historica_mantenimiento = 0  # Para tiempo ocioso
+        # Estado del técnico de mantenimiento:
+        #   'Salio'      -> no está en la sala (entre visitas)
+        #   'Esperando'  -> llegó/avanzó a la próxima PC pero está ocupada
+        #                   con un alumno, espera a que se libere
+        #   'Trabajando' -> está haciendo mantenimiento en pc_a_mantener
+        self.estado_mantenimiento = 'Salio'
+        # Índice 0 a 4 de la PC que le toca en el ciclo (0=PC1 ... 4=PC5).
+        # Recorre siempre en orden y nunca se puede alterar (enunciado).
+        self.pc_a_mantener = 0
+        # Momento en que empezó a esperar la PC actual, para poder medir
+        # el tiempo ocioso (acumulado en tiempo_ocioso_mantenimiento).
+        self.llegada_historica_mantenimiento = 0
 
         # Colas
         self.cola = 0
@@ -124,14 +163,21 @@ class SimulacionInscripcion:
         self.vector_estado = []
 
     # --- Generadores de Variables Aleatorias ---
+    #
+    # Cada método de esta sección genera UNA variable aleatoria con el
+    # método de la transformada inversa, guarda el rnd usado en un
+    # self.rnd_* (para que agregar_fila lo muestre en la fila del evento
+    # que lo generó) y devuelve el valor ya calculado.
 
     def generar_llegada_alumno(self):
+        """Próxima llegada de un alumno: exponencial negativa, media 2'."""
         rnd = random.random()
         self.rnd_llegada_alumno = round(rnd, 4)
         tiempo_entre_llegadas = -self.llegada_media * math.log(1 - rnd)
         return self.reloj + tiempo_entre_llegadas
 
     def generar_tiempo_inscripcion(self):
+        """Duración de una inscripción: uniforme entre a y b minutos."""
         rnd = random.random()
         self.rnd_atencion = round(rnd, 4)
         tiempo = self.inscripcion_a + rnd * \
@@ -139,6 +185,9 @@ class SimulacionInscripcion:
         return tiempo
 
     def generar_llegada_mantenimiento(self):
+        """Próxima visita del técnico: uniforme media ± variación
+        (1 hora ± 3' por defecto), contada desde que se llama (es decir,
+        desde que terminó el mantenimiento de la última PC del ciclo)."""
         rnd = random.random()
         self.rnd_llegada_mantenimiento = round(rnd, 4)
         a = self.mantenimiento_media - self.mantenimiento_var
@@ -147,6 +196,9 @@ class SimulacionInscripcion:
         return self.reloj + tiempo
 
     def generar_archivos_mantenimiento(self):
+        """Cantidad de archivos (A0) de la PC a mantener: 1000, 1500 o
+        2000 con probabilidad 1/3 cada uno. Este valor es el que alimenta
+        la integración por Euler de dA/dt = -68 - A²/A0."""
         rnd = random.random()
         self.rnd_archivos_mantenimiento = round(rnd, 4)
         # Pueden ser 1000, 1500, o 2000 (probabilidad uniforme de 1/3)
@@ -161,6 +213,13 @@ class SimulacionInscripcion:
     # --- Motor de Eventos ---
 
     def ejecutar_simulacion(self):
+        """Corre la simulación completa con la técnica de "próximo
+        evento": en cada vuelta del while se calculan los tiempos de
+        TODOS los eventos que podrían pasar a continuación, se elige el
+        más cercano, se salta el reloj a ese instante y se ejecuta su
+        lógica. Se corta por tiempo_x o iteraciones_max, lo que ocurra
+        primero (como pide el enunciado), y siempre se guarda la última
+        fila aunque haya quedado fuera de la ventana i/j."""
 
         self.agregar_fila("- Inicialización -")
 
@@ -177,7 +236,11 @@ class SimulacionInscripcion:
             self.tiempo_mantenimiento_calc = ''
             self.pc_asignada = ''
 
-            # Buscar el evento inminente
+            # Buscar el evento inminente: armamos un diccionario
+            # {nombre_evento: tiempo_en_que_ocurriría} con todos los
+            # candidatos y nos quedamos con el de menor tiempo. Los
+            # eventos que no están programados (-1) se mandan a +infinito
+            # para que nunca puedan "ganar".
             tiempos_eventos = {
                 'Llegada Alumno': self.proxima_llegada_alumno,
                 'Llegada Mantenimiento': self.proxima_llegada_mantenimiento
@@ -186,28 +249,31 @@ class SimulacionInscripcion:
                 'Fin Mantenimiento': self.proximo_fin_mantenimiento
                 if self.proximo_fin_mantenimiento != -1 else float('inf')}
 
-            # Fin inscripción de cada PC
+            # Fin inscripción de cada PC: puede haber hasta 5 al mismo
+            # tiempo (una por cada PC que esté "Inscribiendo").
             for i, pc in enumerate(self.pcs):
                 if pc.tiempo_fin_inscripcion != -1:
                     tiempos_eventos[
                         f'Fin Inscripcion PC {i+1}'
                     ] = pc.tiempo_fin_inscripcion
 
-            # Regresos más inminentes
+            # Regresos más inminentes (alumnos que se fueron por cola
+            # llena y ya cumplieron su tiempo de espera)
             if self.proximos_regresos:
                 tiempos_eventos['Regreso Alumno'] = min(self.proximos_regresos)
             else:
                 tiempos_eventos['Regreso Alumno'] = float('inf')
 
-            # Obtener el mínimo
-            evento_proximo = min(tiempos_eventos, key=tiempos_eventos.get)
+            # Obtener el mínimo: ese es el "próximo evento" del reloj
+            evento_proximo = min(
+                tiempos_eventos, key=lambda k: tiempos_eventos[k])
             reloj_siguiente = tiempos_eventos[evento_proximo]
 
-            # Actualizar reloj
+            # Actualizar reloj (salto directo al próximo evento)
             self.reloj = reloj_siguiente
             self.iteracion += 1
 
-            # Derivar al gestor correspondiente
+            # Derivar al gestor correspondiente, según qué evento ganó
             if evento_proximo == 'Llegada Alumno':
                 self.evento_llegada_alumno()
             elif evento_proximo == 'Regreso Alumno':
@@ -220,7 +286,10 @@ class SimulacionInscripcion:
                 idx_pc = int(evento_proximo.split()[-1]) - 1
                 self.evento_fin_inscripcion(idx_pc)
 
-            # Ventana de i filas a mostrar a partir de la hora j
+            # Ventana de i filas a mostrar a partir de la hora j: una vez
+            # que el reloj llega a mostrar_desde_hora_j empezamos a
+            # contar, y dejamos de agregar filas al llegar a
+            # mostrar_desde_i (es una sola ventana, no se reabre).
             if (self.reloj >= self.mostrar_desde_hora_j and
                     self.filas_mostradas_en_ventana < self.mostrar_desde_i):
                 self.agregar_fila(evento_proximo)
@@ -233,22 +302,28 @@ class SimulacionInscripcion:
     # --- Lógica de Eventos ---
 
     def procesar_llegada_generica(self):
+        """Lógica común a una llegada nueva y a un regreso: cuenta el
+        alumno, decide si se va (cola llena) o entra al sistema, y si
+        entra busca una PC libre o lo manda a la cola."""
         self.cont_alumnos_llegados += 1
         self.id_alumno_count += 1
 
-        # Verificar si se va (más de max_cola esperando)
+        # Verificar si se va: "si hay más de 6 esperando" se interpreta
+        # como la cola YA estaba en 7+ antes de que llegue este alumno
+        # (si está en 6, este entra como 7mo y todavía no se considera
+        # "más de 6"; el que se va es el siguiente que encuentre la cola
+        # en 7).
         if self.cola > self.max_cola:
             self.cont_alumnos_se_van += 1
             tiempo_regresa = self.reloj + self.tiempo_regreso
             self.proximos_regresos.append(tiempo_regresa)
         else:
-            # Pasa al sistema
-            # Buscar PC Libre que NO esté en mantenimiento y que el del
-            # mantenimiento NO la esté esperando
+            # Pasa al sistema: buscamos una PC libre, salvo la PC que el
+            # técnico de mantenimiento está esperando para usar (tiene
+            # prioridad sobre los alumnos, pero no interrumpe una
+            # inscripción que ya está en curso).
             pc_libre = None
             for p in self.pcs:
-                # Si está libre y si mantenimiento la está esperando no la
-                # tomamos (tiene prioridad mantenimiento)
                 if p.estado == 'Libre' and not (
                     self.estado_mantenimiento == 'Esperando' and p.id_pc -
                         1 == self.pc_a_mantener):
@@ -273,35 +348,55 @@ class SimulacionInscripcion:
                 self.alumnos_en_sistema.append(nuevo_alumno)
 
     def evento_llegada_alumno(self):
+        """Llega un alumno nuevo desde afuera (no un regreso)."""
         self.procesar_llegada_generica()
+        # Programamos cuándo va a llegar el SIGUIENTE alumno
         self.proxima_llegada_alumno = self.generar_llegada_alumno()
 
     def evento_regreso_alumno(self):
-        # Quitamos el mínimo
+        """Un alumno que se había ido por cola llena vuelve a intentar."""
         min_regreso = min(self.proximos_regresos)
         self.proximos_regresos.remove(min_regreso)
         self.procesar_llegada_generica()
 
+    # -- Ciclo del técnico de mantenimiento --
+    #
+    # El técnico hace UNA visita cada vez que se cumple el timer de
+    # "llegada de mantenimiento" (1 hora ± 3'). En esa visita recorre las
+    # 5 PCs SIEMPRE en orden (1, 2, 3, 4, 5) sin poder saltearse ninguna.
+    # Si la PC que le toca está libre, empieza enseguida; si está
+    # "Inscribiendo", se pone a 'Esperando' (con prioridad sobre los
+    # alumnos, pero sin interrumpir la inscripción en curso) hasta que se
+    # libera. Recién cuando termina la PC 5 (la última del ciclo) se va y
+    # programa la siguiente visita; en las PCs 1 a 4 sigue de inmediato
+    # con la próxima, sin generar un nuevo timer de llegada.
+
     def evento_llegada_mantenimiento(self):
+        """Arranca una visita nueva (dispara el timer de 1h ± 3')."""
         self.cont_visitas_mantenimiento += 1
         self.iniciar_espera_mantenimiento()
 
     def iniciar_espera_mantenimiento(self):
-        # El técnico queda a la espera de la PC objetivo del ciclo actual.
-        # Se llama tanto al llegar de afuera (nueva visita) como al pasar de
-        # una PC a la siguiente dentro de la misma visita.
+        """Pone al técnico a la espera de la PC que le toca en el ciclo
+        (pc_a_mantener). Se usa tanto al llegar de afuera (nueva visita)
+        como al pasar de una PC a la siguiente dentro de la misma
+        visita."""
         self.estado_mantenimiento = 'Esperando'
         self.llegada_historica_mantenimiento = self.reloj
-        # Hasta que no termine la visita completa, no generamos la próxima
+        # Hasta que no termine la visita completa (las 5 PCs), no se
+        # programa la próxima llegada de mantenimiento.
         self.proxima_llegada_mantenimiento = -1
 
         pc_objetivo = self.pcs[self.pc_a_mantener]
 
         if pc_objetivo.estado == 'Libre':
-            # Arranca inmediatamente
+            # La PC ya está libre: arranca el mantenimiento ahora mismo
             self.comenzar_mantenimiento(pc_objetivo)
 
     def comenzar_mantenimiento(self, pc_objetivo):
+        """Empieza efectivamente el mantenimiento de una PC: calcula el
+        tiempo ocioso que esperó el técnico, sortea la cantidad de
+        archivos (A0) y usa Euler para calcular cuánto va a demorar."""
         self.estado_mantenimiento = 'Trabajando'
         ocio = self.reloj - self.llegada_historica_mantenimiento
         self.tiempo_ocioso_mantenimiento += ocio
@@ -311,11 +406,16 @@ class SimulacionInscripcion:
         self.archivos_a0 = a0
 
         # <-- Integración EULER -->
-        # El método de Euler retorna una tupla (tiempo, tabla_detalle)
+        # El método de Euler retorna una tupla (tiempo, tabla_detalle):
+        # tiempo es el instante en que A llega a 0 (la PC queda lista) y
+        # tabla_detalle es el paso a paso (t, A) de la integración.
         tiempo_mant, tabla_euler = self.euler.integrar(a0)
         self.tiempo_mantenimiento_calc = round(tiempo_mant, 2)
         self.proximo_fin_mantenimiento = self.reloj + tiempo_mant
 
+        # Guardamos el detalle de esta integración con referencia a la
+        # visita y la PC, para poder mostrarla/exportarla después (pedido
+        # explícito del enunciado).
         self.euler_log.append({
             'id': len(self.euler_log) + 1,
             'visita': self.cont_visitas_mantenimiento,
@@ -327,11 +427,12 @@ class SimulacionInscripcion:
         })
 
     def evento_fin_mantenimiento(self):
+        """Termina el mantenimiento de la PC actual del ciclo."""
         pc_objetivo = self.pcs[self.pc_a_mantener]
         pc_objetivo.estado = 'Libre'
         self.proximo_fin_mantenimiento = -1
 
-        # ¿Hay gente esperando en cola? Tomar el primero
+        # ¿Hay gente esperando en cola? Tomar el primero (FIFO)
         if self.cola > 0:
             self.cola -= 1
             pc_objetivo.estado = 'Inscribiendo'
@@ -359,19 +460,22 @@ class SimulacionInscripcion:
             self.iniciar_espera_mantenimiento()
 
     def evento_fin_inscripcion(self, pc_index):
+        """Termina la inscripción de un alumno en la PC pc_index."""
         pc = self.pcs[pc_index]
         pc.estado = 'Libre'
         pc.tiempo_fin_inscripcion = -1
 
         # Liberar al alumno que estaba siendo atendido en ESTA PC puntual
         # (no el primero que aparezca: puede haber varias PCs atendiendo
-        # alumnos distintos al mismo tiempo)
+        # alumnos distintos al mismo tiempo, por eso filtramos también
+        # por pc_id y no sólo por estado)
         for alum in self.alumnos_en_sistema:
             if alum.estado == 'Siendo inscripto' and alum.pc_id == pc.id_pc:
                 self.alumnos_en_sistema.remove(alum)
                 break
 
-        # ¿El mantenimiento estaba esperando por esta PC?
+        # ¿El mantenimiento estaba esperando justo por esta PC? Tiene
+        # prioridad sobre la cola de alumnos.
         if (self.estado_mantenimiento == 'Esperando' and
                 self.pc_a_mantener == pc_index):
             self.comenzar_mantenimiento(pc)
@@ -394,6 +498,10 @@ class SimulacionInscripcion:
     # --- Resultados finales pedidos por el enunciado ---
 
     def calcular_resultados(self):
+        """Calcula las 3 métricas finales que pide el enunciado:
+        % de alumnos que se van y vuelven más tarde, tiempo ocioso
+        promedio del técnico por visita, y promedio de visitas por día.
+        """
         pct_se_van = (
             self.cont_alumnos_se_van / self.cont_alumnos_llegados
             if self.cont_alumnos_llegados else 0
@@ -403,6 +511,10 @@ class SimulacionInscripcion:
                   self.cont_visitas_mantenimiento, 2)
             if self.cont_visitas_mantenimiento else 'Sin visitas'
         )
+        # Días COMPLETOS simulados (no fraccionarios): si todavía no pasó
+        # un día entero, "visitas por día" sería una proyección inestable
+        # (por ej. con 10 minutos simulados daría una tasa carísima), así
+        # que directamente se informa "Menos de un día".
         dias_simulados = int(self.reloj // 1440)
         visitas_promedio_por_dia = (
             round(self.cont_visitas_mantenimiento / dias_simulados, 2)
@@ -417,7 +529,11 @@ class SimulacionInscripcion:
 
     def exportar_euler_csv(self, path='euler_log.csv'):
         """Vuelca el detalle de cada integración de Euler con referencia a
-        la visita y PC a la que corresponde, para trazabilidad."""
+        la visita y PC a la que corresponde, para trazabilidad (pedido
+        del enunciado: mostrar la integración numérica en la app o
+        bajarla a Excel/CSV con referencia a qué instancia corresponde).
+        Una fila por cada paso (t, A) de Euler, repitiendo id/visita/pc
+        para poder filtrar/agrupar después."""
         with open(path, 'w', newline='', encoding='utf-8') as f:
             writer = csv.writer(f)
             writer.writerow(
@@ -432,7 +548,12 @@ class SimulacionInscripcion:
                     ])
 
     def agregar_fila(self, evento):
-        # Aca extraés todo el estado y lo formatéas en un diccionario
+        """Construye una fila del vector de estado con todo lo que pide
+        el enunciado: número de fila, hora simulada, evento, próximos
+        eventos a ejecutarse (px_*), objetos del sistema con sus
+        atributos (estado_mantenimiento, PCx_est/PCx_fin), variables
+        auxiliares (cola, contadores) y el rnd de cada variable aleatoria
+        que se haya generado en esta iteración puntual."""
         self.numero_fila += 1
         fila = {
             'numero_fila': self.numero_fila,
@@ -475,12 +596,18 @@ class SimulacionInscripcion:
 
 
 def pedir_parametro(mensaje, default, tipo=float):
+    """Pide un parámetro por consola, devolviendo un default si se
+    aprieta Enter sin escribir nada. Usado por el modo CLI (alternativo
+    a la pantalla de PyQt6 en ui/pantalla.py)."""
     entrada = input(f'{mensaje} [{default}]: ').strip()
     if not entrada:
         return default
     return tipo(entrada)
 
 
+# Punto de entrada por línea de comandos: pide los parámetros "en rojo"
+# por consola, corre la simulación completa y muestra el vector de
+# estado, los resultados finales y exporta la integración de Euler.
 if __name__ == "__main__":
     tiempo_x = pedir_parametro(
         'Tiempo X de simulación (minutos)', 1440)

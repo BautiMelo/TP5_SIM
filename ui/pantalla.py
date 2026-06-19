@@ -1,6 +1,17 @@
+# Pantalla principal (PyQt6): junta los parámetros de la simulación,
+# corre el motor (simulacion.py) y muestra el vector de estado y los
+# resultados finales. Reemplaza/complementa el modo por consola de
+# simulacion.py.
 import os
 import sys
 
+# Este archivo vive en ui/, pero importa módulos que están un nivel
+# arriba (params.py, simulacion.py) y módulos que están en su propia
+# carpeta (error_dialog.py). Si se corre como script (`python
+# ui/pantalla.py`) Python sólo agrega ui/ a sys.path, y si se corre como
+# módulo (`python -m ui.pantalla`) sólo agrega la raíz del proyecto. Para
+# que ambos imports funcionen sin importar cómo se lo ejecute, agregamos
+# manualmente las dos carpetas a sys.path.
 _THIS_DIR = os.path.dirname(os.path.abspath(__file__))
 _ROOT_DIR = os.path.dirname(_THIS_DIR)
 for _dir in (_THIS_DIR, _ROOT_DIR):
@@ -30,10 +41,16 @@ from simulacion import SimulacionInscripcion  # noqa: E402
 
 
 class MainWindow(QMainWindow):
+    """Ventana única de la app: a la izquierda los campos de parámetros
+    (todos los valores "en rojo" del enunciado) y un botón Iniciar; a la
+    derecha la tabla con el vector de estado y los resultados finales."""
+
     def __init__(self, default_params: Params):
         super().__init__()
         self.params: Params = default_params
-        self.ultima_simulacion = None
+        # Se completa recién al presionar "Iniciar"; mientras tanto el
+        # botón de exportar Euler queda deshabilitado (ver más abajo).
+        self.ultima_simulacion: SimulacionInscripcion | None = None
 
         self.setWindowTitle("TP5 Simulación")
         self.showMaximized()
@@ -273,6 +290,8 @@ class MainWindow(QMainWindow):
         return layout
 
     def iniciar_simulacion(self):
+        """Handler del botón "Iniciar": valida los campos, corre el
+        motor de punta a punta y muestra los resultados."""
         if not self.leer_parametros():
             return
 
@@ -281,12 +300,16 @@ class MainWindow(QMainWindow):
         vector_estado = self.ultima_simulacion.ejecutar_simulacion()
         self.mostrar_vector_estado(vector_estado)
         self.mostrar_resultados(self.ultima_simulacion.calcular_resultados())
+        # Sólo tiene sentido exportar si hubo al menos un mantenimiento
         self.boton_exportar_euler.setEnabled(
             bool(self.ultima_simulacion.euler_log))
 
     # lee los campos de input y carga los parametros. Devuelve True si
     # todos los valores son válidos, False si mostró algún error.
     def leer_parametros(self) -> bool:
+        # Tabla (input, tipo, validación, mensaje de error, atributo de
+        # Params a actualizar) para no repetir el mismo try/except 12
+        # veces: se valida y vuelca cada campo en un solo loop.
         campos = (
             (self.tiempo_input, float, lambda v: v > 0,
              "El tiempo máximo de simulación debe ser un número positivo.",
@@ -339,6 +362,9 @@ class MainWindow(QMainWindow):
                 if not es_valido(valor):
                     raise ValueError(mensaje)
             except ValueError:
+                # Tanto si tipo() falla (texto no numérico) como si
+                # es_valido() rechaza el valor, mostramos el mismo
+                # diálogo y cortamos sin tocar self.params.
                 ErrorDialog(mensaje).exec()
                 return False
             setattr(self.params, atributo, valor)
@@ -346,6 +372,9 @@ class MainWindow(QMainWindow):
         return True
 
     def mostrar_vector_estado(self, vector_estado):
+        """Vuelca el vector de estado devuelto por la simulación a la
+        tabla: una columna por cada clave del diccionario de fila
+        (número de fila, evento, próximos eventos, rnd's, etc.)."""
         tabla = self.tabla_resultado
         if not vector_estado:
             tabla.setRowCount(0)
@@ -367,6 +396,8 @@ class MainWindow(QMainWindow):
         tabla.setUpdatesEnabled(True)
 
     def mostrar_resultados(self, resultados: dict):
+        """Muestra las 3 respuestas finales del enunciado (% que se van,
+        ocio promedio del técnico, visitas promedio por día)."""
         texto = " | ".join(
             f"{clave}: {valor}" for clave, valor in resultados.items())
         self.resultados_label.setText(texto)
@@ -374,6 +405,11 @@ class MainWindow(QMainWindow):
     # exporta el detalle de cada integración de Euler con referencia a la
     # visita y PC a la que corresponde (pedido por el enunciado)
     def exportar_euler(self):
+        # El botón está deshabilitado hasta que haya una simulación
+        # corrida, pero el guard queda por las dudas (y para que el
+        # checker de tipos sepa que de acá en más no es None).
+        if self.ultima_simulacion is None:
+            return
         self.ultima_simulacion.exportar_euler_csv()
         QMessageBox.information(
             self, "Exportación completa",
@@ -381,6 +417,7 @@ class MainWindow(QMainWindow):
             f"integraciones de Euler a euler_log.csv")
 
 
+# Punto de entrada de la app de escritorio.
 if __name__ == "__main__":
     app = QApplication([])
     params = Params()
