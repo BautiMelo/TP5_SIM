@@ -1,26 +1,25 @@
-import random
+class EulerSimulator:
+    """Integra dA/dt = -68 - A^2/A0 por el metodo de Euler hasta A <= 0."""
 
-valA0 = [1000,1500,2000]
+    def __init__(self, h):
+        self.h = h
 
-def integ(h):
+    def integrar(self, a0):
+        t = 0
+        a = a0
+        tabla = [[t, a]]
 
-    t0 = 0
-#    A0 = random.choice(valA0)
-    A0 = 2000
-    
-    A = A0
-    t1 = t0
-    steps = [t1,A]
+        while a > 0:
+            a = a + (-68 - (a ** 2) / a0) * self.h
+            t = t + self.h
+            tabla.append([t, a])
 
-    while A > 0:
-        A = A + ((-68- (A**2 / A0)  )* h)
-        t1 = t1 + h
-        steps.append([t1,A])
-        
+        return t, tabla
 
-    return [t1, steps]
 
-time,steps = integ(0.1)
-print(time)
-for i in steps:
-    print(i)
+if __name__ == "__main__":
+    euler = EulerSimulator(0.1)
+    tiempo, tabla = euler.integrar(2000)
+    print(tiempo)
+    for fila in tabla:
+        print(fila)
