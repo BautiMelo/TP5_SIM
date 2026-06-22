@@ -109,6 +109,7 @@ class SimulacionInscripcion:
         self.rnd_archivos_mantenimiento = ''
         self.archivos_a0 = ''
         self.tiempo_mantenimiento_calc = ''
+        self.rnd_pc_asignada = ''
         self.pc_asignada = ''
 
         # Próximos eventos principales (-1 significa "sin evento programado")
@@ -243,6 +244,7 @@ class SimulacionInscripcion:
             self.rnd_archivos_mantenimiento = ''
             self.archivos_a0 = ''
             self.tiempo_mantenimiento_calc = ''
+            self.rnd_pc_asignada = ''
             self.pc_asignada = ''
 
             # Buscar el evento inminente: armamos un diccionario
@@ -331,13 +333,19 @@ class SimulacionInscripcion:
             # técnico de mantenimiento está esperando para usar (tiene
             # prioridad sobre los alumnos, pero no interrumpe una
             # inscripción que ya está en curso).
-            pc_libre = None
-            for p in self.pcs:
+            pcs_libres = [
+                p for p in self.pcs
                 if p.estado == 'Libre' and not (
-                    self.estado_mantenimiento == 'Esperando' and p.id_pc -
-                        1 == self.pc_a_mantener):
-                    pc_libre = p
-                    break
+                    self.estado_mantenimiento == 'Esperando'
+                    and p.id_pc - 1 == self.pc_a_mantener)
+            ]
+            pc_libre = None
+            if pcs_libres:
+                rnd = round(random.random(), 2)
+                if rnd >= 1:
+                    rnd = 0.99
+                self.rnd_pc_asignada = rnd
+                pc_libre = pcs_libres[int(rnd * len(pcs_libres))]
 
             if pc_libre:
                 pc_libre.estado = 'Inscribiendo'
@@ -576,15 +584,16 @@ class SimulacionInscripcion:
             'px_llegada_man': round(
                 self.proxima_llegada_mantenimiento,
                 2) if self.proxima_llegada_mantenimiento != -1 else '',
-            'rnd_atencion': self.rnd_atencion,
+            'rnd_pc_asignada': self.rnd_pc_asignada,
             'pc_asignada': self.pc_asignada,
+            'rnd_atencion': self.rnd_atencion,
+            'rnd_archivos_man': self.rnd_archivos_mantenimiento,
+            'archivos_a0': self.archivos_a0,
+            'tiempo_mantenimiento_calc': self.tiempo_mantenimiento_calc,
             'px_fin_man': round(
                     self.proximo_fin_mantenimiento,
                     2) if self.proximo_fin_mantenimiento != -
             1 else '',
-            'rnd_archivos_man': self.rnd_archivos_mantenimiento,
-            'archivos_a0': self.archivos_a0,
-            'tiempo_mantenimiento_calc': self.tiempo_mantenimiento_calc,
             'estado_mantenimiento': self.estado_mantenimiento,
             'pc_en_mantenimiento': self.pcs[self.pc_a_mantener].id_pc,
             'cola': self.cola,
