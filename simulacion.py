@@ -8,6 +8,7 @@
 import csv
 import math
 import random
+from math import trunc
 
 from euler import EulerSimulator
 
@@ -89,6 +90,11 @@ class SimulacionInscripcion:
             tiempo_regreso=params.tiempo_regreso_alumno,
             h_euler=params.paso_euler,
         )
+
+    def generar_random(self):
+        """Genera un numero aleatorio entre 0 y 1 truncado a 2 decimales"""
+        rnd = random.random()
+        return trunc(rnd * 100) / 100
 
     def reset_state(self):
         """Inicializa (o reinicia) todas las variables de estado de una
@@ -175,20 +181,14 @@ class SimulacionInscripcion:
 
     def generar_llegada_alumno(self):
         """Próxima llegada de un alumno: exponencial negativa, media 2'."""
-        rnd = round(random.random(), 2)
-        # Si el random da >= 0.995 redondea a 1.00, y log(1-1.00) no
-        # está definido (1/200 de probabilidad, pero en una corrida de
-        # miles de iteraciones termina pasando). Se tapa con 0.99, el
-        # valor truncado más cercano que sigue siendo válido.
-        if rnd >= 1:
-            rnd = 0.99
+        rnd = self.generar_random()
         self.rnd_llegada_alumno = rnd
         tiempo_entre_llegadas = -self.llegada_media * math.log(1 - rnd)
         return self.reloj + tiempo_entre_llegadas
 
     def generar_tiempo_inscripcion(self):
         """Duración de una inscripción: uniforme entre a y b minutos."""
-        rnd = round(random.random(), 2)
+        rnd = self.generar_random()
         self.rnd_atencion = rnd
         tiempo = self.inscripcion_a + rnd * \
             (self.inscripcion_b - self.inscripcion_a)
@@ -198,7 +198,7 @@ class SimulacionInscripcion:
         """Próxima visita del técnico: uniforme media ± variación
         (1 hora ± 3' por defecto), contada desde que se llama (es decir,
         desde que terminó el mantenimiento de la última PC del ciclo)."""
-        rnd = round(random.random(), 2)
+        rnd = self.generar_random()
         self.rnd_llegada_mantenimiento = rnd
         a = self.mantenimiento_media - self.mantenimiento_var
         b = self.mantenimiento_media + self.mantenimiento_var
@@ -209,7 +209,7 @@ class SimulacionInscripcion:
         """Cantidad de archivos (A0) de la PC a mantener: 1000, 1500 o
         2000 con probabilidad 1/3 cada uno. Este valor es el que alimenta
         la integración por Euler de dA/dt = -68 - A²/A0."""
-        rnd = round(random.random(), 2)
+        rnd = self.generar_random()
         self.rnd_archivos_mantenimiento = rnd
         # Pueden ser 1000, 1500, o 2000 (probabilidad uniforme de 1/3)
         if rnd < 1 / 3:
