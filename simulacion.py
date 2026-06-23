@@ -341,9 +341,7 @@ class SimulacionInscripcion:
             ]
             pc_libre = None
             if pcs_libres:
-                rnd = round(random.random(), 2)
-                if rnd >= 1:
-                    rnd = 0.99
+                rnd = self.generar_random()
                 self.rnd_pc_asignada = rnd
                 pc_libre = pcs_libres[int(rnd * len(pcs_libres))]
 
