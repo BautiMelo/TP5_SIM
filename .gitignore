@@ -2,3 +2,5 @@
 req.txt
 .idea
 __pycache__
+euler_log.csv
+ui/euler_log.csv
